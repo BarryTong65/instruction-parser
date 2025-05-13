@@ -24,6 +24,37 @@ var InstructionDiscriminators = map[string][]byte{
 	"sharedAccountsExactOutRoute":        {0xB0, 0xD1, 0x69, 0xA8, 0x9A, 0x7D, 0x45, 0x3E},
 }
 
+// Jupiter V6 Event Discriminator (第一个事件的前 8 字节)
+var SwapEventDiscriminator = []byte{0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d}
+
+// SwapEvent 表示 Jupiter V6 的交换事件
+type SwapEvent struct {
+	Discriminator []byte           `json:"discriminator"`
+	Unknown       []byte           `json:"unknown"`       // 8-15 字节，未知字段
+	AMM           solana.PublicKey `json:"amm"`           // 16-47 字节，AMM 程序地址
+	InputMint     solana.PublicKey `json:"input_mint"`    // 48-79 字节，输入代币地址
+	InputAmount   uint64           `json:"input_amount"`  // 80-87 字节，输入金额
+	OutputMint    solana.PublicKey `json:"output_mint"`   // 88-119 字节，输出代币地址
+	OutputAmount  uint64           `json:"output_amount"` // 120-127 字节，输出金额
+}
+
+// JupiterV6Analysis 表示完整的 Jupiter V6 交易分析结果
+type JupiterV6Analysis struct {
+	Instructions []JupiterSwapParams `json:"instructions"`
+	Events       []SwapEvent         `json:"events"`
+	Summary      SwapSummary         `json:"summary"`
+}
+
+// SwapSummary 表示交换摘要信息
+type SwapSummary struct {
+	TotalSwaps  int    `json:"total_swaps"`
+	InputToken  string `json:"input_token"`
+	OutputToken string `json:"output_token"`
+	TotalInput  uint64 `json:"total_input"`
+	TotalOutput uint64 `json:"total_output"`
+	Route       string `json:"route"`
+}
+
 // 表示不同的交换协议类型
 type SwapType string
 
@@ -194,105 +225,6 @@ type JupiterSwapParams struct {
 
 // Jupiter V6 Program ID
 var jupiterV6ProgramID = solana.MustPublicKeyFromBase58("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
-
-func main() {
-	// Transaction signature
-	txSignature := solana.MustSignatureFromBase58("iFqs11xumLUiicLW36TzJNoJVnRdu5EtXXLsA9imFfUMonDvnErppnpm5BnXSAwUsyvWhG7EFMp3aYP7suqjYPg")
-
-	// Initialize RPC client with rate limiting
-	rpcClient := rpc.NewWithCustomRPCClient(rpc.NewWithLimiter(
-		rpc.MainNetBeta.RPC,
-		rate.Every(time.Second),
-		5,
-	))
-
-	// Get transaction with version support
-	version := uint64(0)
-	tx, err := rpcClient.GetTransaction(
-		context.Background(),
-		txSignature,
-		&rpc.GetTransactionOpts{
-			MaxSupportedTransactionVersion: &version,
-			Encoding:                       solana.EncodingBase64,
-		},
-	)
-	if err != nil {
-		fmt.Printf("Error getting transaction: %v\n", err)
-		return
-	}
-
-	// Parse the transaction
-	parsedTx, err := tx.Transaction.GetTransaction()
-	if err != nil {
-		fmt.Printf("Error parsing transaction: %v\n", err)
-		return
-	}
-
-	// Process versioned transactions with address lookup tables
-	if parsedTx.Message.IsVersioned() {
-		err = resolveAddressLookupTables(parsedTx, rpcClient)
-		if err != nil {
-			fmt.Printf("Error resolving address lookup tables: %v\n", err)
-			return
-		}
-	}
-
-	// Debug print the transaction
-	fmt.Println("Transaction details:")
-	fmt.Printf("  Instructions count: %d\n", len(parsedTx.Message.Instructions))
-	fmt.Printf("  Is versioned: %v\n", parsedTx.Message.IsVersioned())
-
-	// Now find and parse Jupiter instructions
-	found := false
-	for i, inst := range parsedTx.Message.Instructions {
-		// Safely access program ID
-		programIDIndex := int(inst.ProgramIDIndex)
-		if programIDIndex >= len(parsedTx.Message.AccountKeys) {
-			fmt.Printf("Instruction %d: Program ID index out of range\n", i)
-			continue
-		}
-
-		programID := parsedTx.Message.AccountKeys[programIDIndex]
-		if programID.Equals(jupiterV6ProgramID) {
-			found = true
-			fmt.Printf("\nFound Jupiter instruction at index %d\n", i)
-			fmt.Printf("Data length: %d bytes\n", len(inst.Data))
-
-			if len(inst.Data) > 0 {
-				// Print raw bytes for debugging
-				fmt.Printf("Raw data (First 32 bytes): %X\n", inst.Data[:min(32, len(inst.Data))])
-
-				// Parse the instruction
-				result, err := parseJupiterV6Instruction(inst.Data)
-				if err != nil {
-					fmt.Printf("Error parsing Jupiter V6 instruction: %v\n", err)
-					continue
-				}
-
-				// Print detailed results
-				printJupiterV6Results(result)
-			}
-		}
-	}
-
-	if !found {
-		fmt.Println("No Jupiter instructions found in main instructions")
-		// Check inner instructions if available
-		if tx.Meta != nil && tx.Meta.InnerInstructions != nil {
-			for _, innerInst := range tx.Meta.InnerInstructions {
-				for i, inst := range innerInst.Instructions {
-					if inst.ProgramIDIndex < uint16(len(parsedTx.Message.AccountKeys)) {
-						programID := parsedTx.Message.AccountKeys[inst.ProgramIDIndex]
-						if programID.Equals(jupiterV6ProgramID) {
-							fmt.Printf("\nFound Jupiter instruction in inner instruction at index %d\n", i)
-							// 处理内部指令...
-						}
-					}
-				}
-			}
-		}
-	}
-}
 
 // parseJupiterV6Instruction 解析 Jupiter V6 指令数据
 func parseJupiterV6Instruction(data []byte) (*JupiterSwapParams, error) {
@@ -1100,4 +1032,381 @@ func boolToCheckmark(b bool) string {
 		return "✓"
 	}
 	return "✗"
+}
+
+// parseJupiterSwapEvent 解析 Jupiter V6 Swap Event
+func parseJupiterSwapEvent(data []byte) (*SwapEvent, error) {
+	if len(data) < 128 {
+		return nil, fmt.Errorf("swap event data too short: %d bytes", len(data))
+	}
+
+	// 检查 discriminator
+	if !bytesEqual(data[:8], SwapEventDiscriminator) {
+		return nil, fmt.Errorf("invalid swap event discriminator")
+	}
+
+	event := &SwapEvent{
+		Discriminator: data[:8],
+		Unknown:       data[8:16],
+	}
+
+	// 解析 AMM 地址 (16-47 字节)
+	event.AMM = solana.PublicKeyFromBytes(data[16:48])
+
+	// 解析 Input Mint (48-79 字节)
+	event.InputMint = solana.PublicKeyFromBytes(data[48:80])
+
+	// 解析 Input Amount (80-87 字节，小端序)
+	event.InputAmount = binary.LittleEndian.Uint64(data[80:88])
+
+	// 解析 Output Mint (88-119 字节)
+	event.OutputMint = solana.PublicKeyFromBytes(data[88:120])
+
+	// 解析 Output Amount (120-127 字节，小端序)
+	event.OutputAmount = binary.LittleEndian.Uint64(data[120:128])
+
+	return event, nil
+}
+
+// parseJupiterSwapEventFromBase58 从 base58 字符串解析 Swap Event
+func parseJupiterSwapEventFromBase58(base58Data string) (*SwapEvent, error) {
+	data := []byte(base58Data)
+
+	return parseJupiterSwapEvent(data)
+}
+
+// extractJupiterEvents 从交易的内部指令中提取 Jupiter 事件
+func extractJupiterEvents(tx *rpc.GetTransactionResult) ([]SwapEvent, error) {
+	var events []SwapEvent
+
+	if tx.Meta == nil || tx.Meta.InnerInstructions == nil {
+		return events, nil
+	}
+
+	parseTx, err := tx.Transaction.GetTransaction()
+	if err != nil {
+		return events, nil
+	}
+
+	// 遍历所有内部指令
+	for _, innerInst := range tx.Meta.InnerInstructions {
+		for _, inst := range innerInst.Instructions {
+			// 检查是否是 Jupiter 程序指令
+			if inst.ProgramIDIndex < uint16(len(parseTx.Message.AccountKeys)) {
+				programID := parseTx.Message.AccountKeys[inst.ProgramIDIndex]
+				if programID.Equals(jupiterV6ProgramID) {
+					// 尝试解析为 Swap Event
+					if len(inst.Data) == 128 {
+						// 将 base58 编码的数据转换为字节
+						data := []byte(inst.Data)
+
+						// 检查是否是 Swap Event
+						if bytesEqual(data[:8], SwapEventDiscriminator) {
+							event, err := parseJupiterSwapEvent(data)
+							if err == nil {
+								events = append(events, *event)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 也检查日志中的事件数据
+	if tx.Meta.LogMessages != nil {
+		for _, logMsg := range tx.Meta.LogMessages {
+			// 检查是否是程序数据日志
+			if strings.Contains(logMsg, "Program data: ") {
+				// 提取数据部分
+				parts := strings.Split(logMsg, "Program data: ")
+				if len(parts) > 1 {
+					base58Data := strings.TrimSpace(parts[1])
+
+					// 尝试解析为 Swap Event
+					event, err := parseJupiterSwapEventFromBase58(base58Data)
+					if err == nil {
+						events = append(events, *event)
+					}
+				}
+			}
+		}
+	}
+
+	return events, nil
+}
+
+// analyzeJupiterV6Transaction 完整分析 Jupiter V6 交易
+func analyzeJupiterV6Transaction(tx *rpc.GetTransactionResult, parsedTx *solana.Transaction) (*JupiterV6Analysis, error) {
+	analysis := &JupiterV6Analysis{
+		Instructions: []JupiterSwapParams{},
+		Events:       []SwapEvent{},
+	}
+
+	// 1. 解析指令
+	for i, inst := range parsedTx.Message.Instructions {
+		programIDIndex := int(inst.ProgramIDIndex)
+		if programIDIndex >= len(parsedTx.Message.AccountKeys) {
+			continue
+		}
+
+		programID := parsedTx.Message.AccountKeys[programIDIndex]
+		if programID.Equals(jupiterV6ProgramID) {
+			fmt.Printf("\nAnalyzing Jupiter instruction at index %d\n", i)
+
+			// 解析指令
+			result, err := parseJupiterV6Instruction(inst.Data)
+			if err != nil {
+				fmt.Printf("Error parsing instruction: %v\n", err)
+				continue
+			}
+
+			analysis.Instructions = append(analysis.Instructions, *result)
+		}
+	}
+
+	// 2. 提取事件
+	events, err := extractJupiterEvents(tx)
+	if err != nil {
+		return nil, fmt.Errorf("error extracting events: %v", err)
+	}
+	analysis.Events = events
+
+	// 3. 生成摘要
+	analysis.Summary = generateSwapSummary(analysis.Instructions, analysis.Events)
+
+	return analysis, nil
+}
+
+// generateSwapSummary 生成交换摘要
+func generateSwapSummary(instructions []JupiterSwapParams, events []SwapEvent) SwapSummary {
+	summary := SwapSummary{
+		TotalSwaps: len(events),
+	}
+
+	if len(events) > 0 {
+		// 输入代币是第一个事件的输入
+		summary.InputToken = events[0].InputMint.String()
+		summary.TotalInput = events[0].InputAmount
+
+		// 输出代币是最后一个事件的输出
+		lastEvent := events[len(events)-1]
+		summary.OutputToken = lastEvent.OutputMint.String()
+		summary.TotalOutput = lastEvent.OutputAmount
+
+		// 构建路由信息
+		route := []string{summary.InputToken}
+		for _, event := range events {
+			route = append(route, event.OutputMint.String())
+		}
+		summary.Route = strings.Join(route, " -> ")
+	}
+
+	return summary
+}
+
+// printSwapEvent 打印 Swap Event 的详细信息
+func printSwapEvent(event SwapEvent, index int) {
+	fmt.Printf("\n=== Swap Event %d ===\n", index+1)
+	fmt.Printf("Discriminator: %X\n", event.Discriminator)
+	fmt.Printf("Unknown Field: %X\n", event.Unknown)
+	fmt.Printf("AMM: %s\n", event.AMM.String())
+	fmt.Printf("Input Mint: %s\n", event.InputMint.String())
+	fmt.Printf("Input Amount: %d\n", event.InputAmount)
+	fmt.Printf("Output Mint: %s\n", event.OutputMint.String())
+	fmt.Printf("Output Amount: %d\n", event.OutputAmount)
+
+	// 格式化为 6 位小数
+	fmt.Printf("\nFormatted Values (6 decimals):\n")
+	fmt.Printf("  Input Amount: %.6f\n", float64(event.InputAmount)/1000000.0)
+	fmt.Printf("  Output Amount: %.6f\n", float64(event.OutputAmount)/1000000.0)
+}
+
+// printJupiterV6Analysis 打印完整的 Jupiter V6 分析结果
+func printJupiterV6Analysis(analysis *JupiterV6Analysis) {
+	fmt.Println("\n=== Jupiter V6 Transaction Analysis ===")
+
+	// 打印摘要
+	fmt.Printf("\nSummary:\n")
+	fmt.Printf("  Total Swaps: %d\n", analysis.Summary.TotalSwaps)
+	fmt.Printf("  Input Token: %s\n", analysis.Summary.InputToken)
+	fmt.Printf("  Output Token: %s\n", analysis.Summary.OutputToken)
+	fmt.Printf("  Total Input: %d (%.6f)\n", analysis.Summary.TotalInput, float64(analysis.Summary.TotalInput)/1000000.0)
+	fmt.Printf("  Total Output: %d (%.6f)\n", analysis.Summary.TotalOutput, float64(analysis.Summary.TotalOutput)/1000000.0)
+	fmt.Printf("  Route: %s\n", analysis.Summary.Route)
+
+	// 打印指令详情
+	fmt.Printf("\nInstructions (%d):\n", len(analysis.Instructions))
+	for i, inst := range analysis.Instructions {
+		fmt.Printf("\n--- Instruction %d ---\n", i+1)
+		printJupiterV6Results(&inst)
+	}
+
+	// 打印事件详情
+	fmt.Printf("\nSwap Events (%d):\n", len(analysis.Events))
+	for i, event := range analysis.Events {
+		printSwapEvent(event, i)
+	}
+
+	// 生成 JSON 输出
+	fmt.Printf("\n=== JSON Output ===\n")
+	printJupiterV6AnalysisJSON(analysis)
+}
+
+// printJupiterV6AnalysisJSON 打印 JSON 格式的分析结果
+func printJupiterV6AnalysisJSON(analysis *JupiterV6Analysis) {
+	fmt.Printf("{\n")
+	fmt.Printf("  \"summary\": {\n")
+	fmt.Printf("    \"total_swaps\": %d,\n", analysis.Summary.TotalSwaps)
+	fmt.Printf("    \"input_token\": \"%s\",\n", analysis.Summary.InputToken)
+	fmt.Printf("    \"output_token\": \"%s\",\n", analysis.Summary.OutputToken)
+	fmt.Printf("    \"total_input\": \"%d\",\n", analysis.Summary.TotalInput)
+	fmt.Printf("    \"total_output\": \"%d\",\n", analysis.Summary.TotalOutput)
+	fmt.Printf("    \"route\": \"%s\"\n", analysis.Summary.Route)
+	fmt.Printf("  },\n")
+
+	fmt.Printf("  \"instructions\": [\n")
+	for i, inst := range analysis.Instructions {
+		fmt.Printf("    {\n")
+		fmt.Printf("      \"instruction_type\": \"%s\",\n", inst.InstructionType)
+		if inst.ID != 0 {
+			fmt.Printf("      \"id\": %d,\n", inst.ID)
+		}
+		fmt.Printf("      \"in_amount\": \"%d\",\n", inst.InAmount)
+		fmt.Printf("      \"quoted_out_amount\": \"%d\",\n", inst.QuotedOutAmount)
+		fmt.Printf("      \"slippage_bps\": \"%d\",\n", inst.SlippageBps)
+		fmt.Printf("      \"platform_fee_bps\": %d\n", inst.PlatformFeeBps)
+		if i < len(analysis.Instructions)-1 {
+			fmt.Printf("    },\n")
+		} else {
+			fmt.Printf("    }\n")
+		}
+	}
+	fmt.Printf("  ],\n")
+
+	fmt.Printf("  \"events\": [\n")
+	for i, event := range analysis.Events {
+		fmt.Printf("    {\n")
+		fmt.Printf("      \"amm\": \"%s\",\n", event.AMM.String())
+		fmt.Printf("      \"input_mint\": \"%s\",\n", event.InputMint.String())
+		fmt.Printf("      \"input_amount\": \"%d\",\n", event.InputAmount)
+		fmt.Printf("      \"output_mint\": \"%s\",\n", event.OutputMint.String())
+		fmt.Printf("      \"output_amount\": \"%d\"\n", event.OutputAmount)
+		if i < len(analysis.Events)-1 {
+			fmt.Printf("    },\n")
+		} else {
+			fmt.Printf("    }\n")
+		}
+	}
+	fmt.Printf("  ]\n")
+	fmt.Printf("}\n")
+}
+
+func main() {
+	// Transaction signature
+	txSignature := solana.MustSignatureFromBase58("5Mckd1q1vKHP7X4r45gcdNoy9gKfjG3jYUG6vyx6tPB3MzKrD44hHiP89PnPGQTV1p6NG56rz1jp6AyxKFtyo4aR")
+
+	// Initialize RPC client with rate limiting
+	rpcClient := rpc.NewWithCustomRPCClient(rpc.NewWithLimiter(
+		rpc.MainNetBeta.RPC,
+		rate.Every(time.Second),
+		5,
+	))
+
+	// Get transaction with version support
+	version := uint64(0)
+	tx, err := rpcClient.GetTransaction(
+		context.Background(),
+		txSignature,
+		&rpc.GetTransactionOpts{
+			MaxSupportedTransactionVersion: &version,
+			Encoding:                       solana.EncodingBase64,
+		},
+	)
+	if err != nil {
+		fmt.Printf("Error getting transaction: %v\n", err)
+		return
+	}
+
+	// Parse the transaction
+	parsedTx, err := tx.Transaction.GetTransaction()
+	if err != nil {
+		fmt.Printf("Error parsing transaction: %v\n", err)
+		return
+	}
+
+	// Process versioned transactions with address lookup tables
+	if parsedTx.Message.IsVersioned() {
+		err = resolveAddressLookupTables(parsedTx, rpcClient)
+		if err != nil {
+			fmt.Printf("Error resolving address lookup tables: %v\n", err)
+			return
+		}
+	}
+
+	// Debug print the transaction
+	fmt.Println("Transaction details:")
+	fmt.Printf("  Instructions count: %d\n", len(parsedTx.Message.Instructions))
+	fmt.Printf("  Is versioned: %v\n", parsedTx.Message.IsVersioned())
+
+	// Now find and parse Jupiter instructions
+	found := false
+	for i, inst := range parsedTx.Message.Instructions {
+		// Safely access program ID
+		programIDIndex := int(inst.ProgramIDIndex)
+		if programIDIndex >= len(parsedTx.Message.AccountKeys) {
+			fmt.Printf("Instruction %d: Program ID index out of range\n", i)
+			continue
+		}
+
+		programID := parsedTx.Message.AccountKeys[programIDIndex]
+		if programID.Equals(jupiterV6ProgramID) {
+			found = true
+			fmt.Printf("\nFound Jupiter instruction at index %d\n", i)
+			fmt.Printf("Data length: %d bytes\n", len(inst.Data))
+
+			if len(inst.Data) > 0 {
+				// Print raw bytes for debugging
+				fmt.Printf("Raw data (First 32 bytes): %X\n", inst.Data[:min(32, len(inst.Data))])
+
+				// Parse the instruction
+				result, err := parseJupiterV6Instruction(inst.Data)
+				if err != nil {
+					fmt.Printf("Error parsing Jupiter V6 instruction: %v\n", err)
+					continue
+				}
+
+				// Print detailed results
+				printJupiterV6Results(result)
+			}
+		}
+	}
+
+	if !found {
+		fmt.Println("No Jupiter instructions found in main instructions")
+		// Check inner instructions if available
+		if tx.Meta != nil && tx.Meta.InnerInstructions != nil {
+			for _, innerInst := range tx.Meta.InnerInstructions {
+				for i, inst := range innerInst.Instructions {
+					if inst.ProgramIDIndex < uint16(len(parsedTx.Message.AccountKeys)) {
+						programID := parsedTx.Message.AccountKeys[inst.ProgramIDIndex]
+						if programID.Equals(jupiterV6ProgramID) {
+							fmt.Printf("\nFound Jupiter instruction in inner instruction at index %d\n", i)
+							// 处理内部指令...
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 执行完整的 Jupiter V6 分析
+	analysis, err := analyzeJupiterV6Transaction(tx, parsedTx)
+	if err != nil {
+		fmt.Printf("Error analyzing Jupiter V6 transaction: %v\n", err)
+		return
+	}
+
+	// 打印分析结果
+	printJupiterV6Analysis(analysis)
 }
