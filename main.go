@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -14,7 +13,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Jupiter V6 指令类型的判别码 (Discriminators)
+// InstructionDiscriminators Jupiter V6 instruction type discriminators
 var InstructionDiscriminators = map[string][]byte{
 	"route":                              {0xE5, 0x17, 0xCB, 0x97, 0x7A, 0xE3, 0xAD, 0x2A},
 	"routeWithTokenLedger":               {0x96, 0x56, 0x47, 0x74, 0xA7, 0x5D, 0x0E, 0x68},
@@ -24,28 +23,28 @@ var InstructionDiscriminators = map[string][]byte{
 	"sharedAccountsExactOutRoute":        {0xB0, 0xD1, 0x69, 0xA8, 0x9A, 0x7D, 0x45, 0x3E},
 }
 
-// Jupiter V6 Event Discriminator (第一个事件的前 8 字节)
+// SwapEventDiscriminator Jupiter V6 Event Discriminator (first 8 bytes of the first event)
 var SwapEventDiscriminator = []byte{0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d}
 
-// SwapEvent 表示 Jupiter V6 的交换事件
+// SwapEvent represents a Jupiter V6 swap event
 type SwapEvent struct {
 	Discriminator []byte           `json:"discriminator"`
-	Unknown       []byte           `json:"unknown"`       // 8-15 字节，未知字段
-	AMM           solana.PublicKey `json:"amm"`           // 16-47 字节，AMM 程序地址
-	InputMint     solana.PublicKey `json:"input_mint"`    // 48-79 字节，输入代币地址
-	InputAmount   uint64           `json:"input_amount"`  // 80-87 字节，输入金额
-	OutputMint    solana.PublicKey `json:"output_mint"`   // 88-119 字节，输出代币地址
-	OutputAmount  uint64           `json:"output_amount"` // 120-127 字节，输出金额
+	Unknown       []byte           `json:"unknown"`       // Bytes 8-15, unknown field
+	AMM           solana.PublicKey `json:"amm"`           // Bytes 16-47, AMM program address
+	InputMint     solana.PublicKey `json:"input_mint"`    // Bytes 48-79, input token address
+	InputAmount   uint64           `json:"input_amount"`  // Bytes 80-87, input amount
+	OutputMint    solana.PublicKey `json:"output_mint"`   // Bytes 88-119, output token address
+	OutputAmount  uint64           `json:"output_amount"` // Bytes 120-127, output amount
 }
 
-// JupiterV6Analysis 表示完整的 Jupiter V6 交易分析结果
+// JupiterV6Analysis represents the complete Jupiter V6 transaction analysis result
 type JupiterV6Analysis struct {
 	Instructions []JupiterSwapParams `json:"instructions"`
 	Events       []SwapEvent         `json:"events"`
 	Summary      SwapSummary         `json:"summary"`
 }
 
-// SwapSummary 表示交换摘要信息
+// SwapSummary represents swap summary information
 type SwapSummary struct {
 	TotalSwaps  int    `json:"total_swaps"`
 	InputToken  string `json:"input_token"`
@@ -55,7 +54,7 @@ type SwapSummary struct {
 	Route       string `json:"route"`
 }
 
-// 表示不同的交换协议类型
+// SwapType Represents different swap protocol types
 type SwapType string
 
 const (
@@ -126,7 +125,7 @@ const (
 	SwapPumpdotfunAmmSell            SwapType = "PumpdotfunAmmSell"
 )
 
-// 交换类型到索引的映射
+// SwapTypeToIndex Map of swap types to indices
 var SwapTypeToIndex = map[SwapType]uint8{
 	SwapSaber:                        0,
 	SwapSaberAddDecimalsDeposit:      1,
@@ -195,13 +194,13 @@ var SwapTypeToIndex = map[SwapType]uint8{
 	SwapPumpdotfunAmmSell:            109,
 }
 
-// Swap 结构体
+// Swap struct
 type Swap struct {
 	Type   SwapType               `json:"name"`
 	Params map[string]interface{} `json:"params"`
 }
 
-// RoutePlanStep 表示路由计划中的一个步骤
+// RoutePlanStep represents a step in the route plan
 type RoutePlanStep struct {
 	Swap        Swap  `json:"swap"`
 	Percent     uint8 `json:"percent"`
@@ -209,7 +208,7 @@ type RoutePlanStep struct {
 	OutputIndex uint8 `json:"output_index"`
 }
 
-// JupiterSwapParams 表示 Jupiter 交换参数
+// JupiterSwapParams represents Jupiter swap parameters
 type JupiterSwapParams struct {
 	InstructionType string          `json:"instruction_type"`
 	ID              uint8           `json:"id,omitempty"`
@@ -226,7 +225,7 @@ type JupiterSwapParams struct {
 // Jupiter V6 Program ID
 var jupiterV6ProgramID = solana.MustPublicKeyFromBase58("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")
 
-// parseJupiterV6Instruction 解析 Jupiter V6 指令数据
+// parseJupiterV6Instruction parses Jupiter V6 instruction data
 func parseJupiterV6Instruction(data []byte) (*JupiterSwapParams, error) {
 	if len(data) < 8 {
 		return nil, fmt.Errorf("instruction data too short")
@@ -235,7 +234,7 @@ func parseJupiterV6Instruction(data []byte) (*JupiterSwapParams, error) {
 	// Check discriminator to determine instruction type
 	discriminator := data[:8]
 
-	// 检查各种指令类型
+	// Check various instruction types
 	if bytesEqual(discriminator, InstructionDiscriminators["route"]) {
 		return parseRouteInstruction(data, "route")
 	} else if bytesEqual(discriminator, InstructionDiscriminators["routeWithTokenLedger"]) {
@@ -253,15 +252,15 @@ func parseJupiterV6Instruction(data []byte) (*JupiterSwapParams, error) {
 	return nil, fmt.Errorf("unknown instruction discriminator: %X", discriminator)
 }
 
-// parseRouteInstruction 解析 route 和 routeWithTokenLedger 指令
+// parseRouteInstruction parses route and routeWithTokenLedger instructions
 func parseRouteInstruction(data []byte, instructionType string) (*JupiterSwapParams, error) {
 	offset := 8 // Skip discriminator
 
-	// 解析 route plan 数量
+	// Parse route plan count
 	routePlanCount := binary.LittleEndian.Uint32(data[offset : offset+4])
 	offset += 4
 
-	// 解析每个 route plan step
+	// Parse each route plan step
 	routePlan := make([]RoutePlanStep, routePlanCount)
 	for i := uint32(0); i < routePlanCount; i++ {
 		step, newOffset, err := parseRoutePlanStep(data, offset)
@@ -272,7 +271,7 @@ func parseRouteInstruction(data []byte, instructionType string) (*JupiterSwapPar
 		offset = newOffset
 	}
 
-	// 解析其他参数
+	// Parse other parameters
 	inAmount := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
 
@@ -284,7 +283,7 @@ func parseRouteInstruction(data []byte, instructionType string) (*JupiterSwapPar
 
 	platformFeeBps := data[offset]
 
-	// 计算 min_amount_out
+	// Calculate min_amount_out
 	minAmountOut := uint64(float64(quotedOutAmount) * (1.0 - float64(slippageBps)/10000.0))
 
 	return &JupiterSwapParams{
@@ -298,19 +297,19 @@ func parseRouteInstruction(data []byte, instructionType string) (*JupiterSwapPar
 	}, nil
 }
 
-// parseSharedAccountsRoute 解析 sharedAccountsRoute 类型的指令
+// parseSharedAccountsRoute parses sharedAccountsRoute type instructions
 func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwapParams, error) {
 	offset := 8 // Skip discriminator
 
-	// 解析 ID
+	// Parse ID
 	id := data[offset]
 	offset++
 
-	// 解析 route plan 数量
+	// Parse route plan count
 	routePlanCount := binary.LittleEndian.Uint32(data[offset : offset+4])
 	offset += 4
 
-	// 解析每个 route plan step
+	// Parse each route plan step
 	routePlan := make([]RoutePlanStep, routePlanCount)
 	for i := uint32(0); i < routePlanCount; i++ {
 		step, newOffset, err := parseRoutePlanStep(data, offset)
@@ -323,9 +322,9 @@ func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwap
 
 	var inAmount, quotedOutAmount, minAmountOut uint64
 
-	// 根据指令类型解析剩余字段
+	// Parse remaining fields based on instruction type
 	if instructionType == "sharedAccountsExactOutRoute" {
-		// exactOut 指令的结构不同
+		// exactOut instruction has a different structure
 		quotedOutAmount = binary.LittleEndian.Uint64(data[offset : offset+8])
 		offset += 8
 
@@ -337,7 +336,7 @@ func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwap
 
 		platformFeeBps := data[offset]
 
-		// 对于 exactOut，计算最大输入量
+		// For exactOut, calculate maximum input amount
 		maxAmountIn := uint64(float64(inAmount) * (1.0 + float64(slippageBps)/10000.0))
 
 		return &JupiterSwapParams{
@@ -348,10 +347,10 @@ func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwap
 			QuotedInAmount:  inAmount,
 			SlippageBps:     slippageBps,
 			PlatformFeeBps:  platformFeeBps,
-			MinAmountOut:    maxAmountIn, // 存储在这个字段中
+			MinAmountOut:    maxAmountIn, // Stored in this field
 		}, nil
 	} else {
-		// 标准的 route 指令
+		// Standard route instruction
 		inAmount = binary.LittleEndian.Uint64(data[offset : offset+8])
 		offset += 8
 
@@ -363,7 +362,7 @@ func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwap
 
 		platformFeeBps := data[offset]
 
-		// 计算 min_amount_out
+		// Calculate min_amount_out
 		minAmountOut = uint64(float64(quotedOutAmount) * (1.0 - float64(slippageBps)/10000.0))
 
 		return &JupiterSwapParams{
@@ -379,15 +378,15 @@ func parseSharedAccountsRoute(data []byte, instructionType string) (*JupiterSwap
 	}
 }
 
-// parseExactOutRoute 解析 exactOutRoute 指令
+// parseExactOutRoute parses exactOutRoute instructions
 func parseExactOutRoute(data []byte, instructionType string) (*JupiterSwapParams, error) {
 	offset := 8 // Skip discriminator
 
-	// 解析 route plan 数量
+	// Parse route plan count
 	routePlanCount := binary.LittleEndian.Uint32(data[offset : offset+4])
 	offset += 4
 
-	// 解析每个 route plan step
+	// Parse each route plan step
 	routePlan := make([]RoutePlanStep, routePlanCount)
 	for i := uint32(0); i < routePlanCount; i++ {
 		step, newOffset, err := parseRoutePlanStep(data, offset)
@@ -398,7 +397,7 @@ func parseExactOutRoute(data []byte, instructionType string) (*JupiterSwapParams
 		offset = newOffset
 	}
 
-	// exactOut 指令的结构
+	// exactOut instruction structure
 	outAmount := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
 
@@ -410,7 +409,7 @@ func parseExactOutRoute(data []byte, instructionType string) (*JupiterSwapParams
 
 	platformFeeBps := data[offset]
 
-	// 计算最大输入量
+	// Calculate maximum input amount
 	maxAmountIn := uint64(float64(quotedInAmount) * (1.0 + float64(slippageBps)/10000.0))
 
 	return &JupiterSwapParams{
@@ -420,38 +419,38 @@ func parseExactOutRoute(data []byte, instructionType string) (*JupiterSwapParams
 		QuotedInAmount:  quotedInAmount,
 		SlippageBps:     slippageBps,
 		PlatformFeeBps:  platformFeeBps,
-		MinAmountOut:    maxAmountIn, // 对于 exactOut，这实际上是最大输入量
+		MinAmountOut:    maxAmountIn, // For exactOut, this is actually the max input amount
 	}, nil
 }
 
-// parseRoutePlanStep 解析单个路由计划步骤
+// parseRoutePlanStep parses a single route plan step
 func parseRoutePlanStep(data []byte, offset int) (RoutePlanStep, int, error) {
 	if offset+4 > len(data) {
 		return RoutePlanStep{}, offset, fmt.Errorf("not enough data for route plan step")
 	}
 
-	// 解析 swap type (1 byte)
+	// Parse swap type (1 byte)
 	swapTypeIndex := data[offset]
 	offset++
 
-	// 根据索引确定 swap type 和参数
+	// Determine swap type and parameters based on index
 	swap, err := decodeSwapType(swapTypeIndex, data, offset)
 	if err != nil {
 		return RoutePlanStep{}, offset, err
 	}
 
-	// 更新 offset 基于 swap 类型的参数大小
+	// Update offset based on swap type parameter size
 	offset = updateOffsetForSwapType(swapTypeIndex, offset)
 
-	// 解析 percent
+	// Parse percent
 	percent := data[offset]
 	offset++
 
-	// 解析 input_index
+	// Parse input_index
 	inputIndex := data[offset]
 	offset++
 
-	// 解析 output_index
+	// Parse output_index
 	outputIndex := data[offset]
 	offset++
 
@@ -463,7 +462,7 @@ func parseRoutePlanStep(data []byte, offset int) (RoutePlanStep, int, error) {
 	}, offset, nil
 }
 
-// decodeSwapType 根据索引解码交换类型
+// decodeSwapType decodes swap type based on index
 func decodeSwapType(swapTypeIndex uint8, data []byte, offset int) (Swap, error) {
 	switch swapTypeIndex {
 	case 0:
@@ -770,27 +769,27 @@ func decodeSwapType(swapTypeIndex uint8, data []byte, offset int) (Swap, error) 
 	}
 }
 
-// updateOffsetForSwapType 根据交换类型更新偏移量
+// updateOffsetForSwapType updates the offset based on swap type
 func updateOffsetForSwapType(swapTypeIndex uint8, offset int) int {
 	switch swapTypeIndex {
-	case 8, 12, 15, 16, 17, 18, 21, 23, 24, 27, 28, 39, 47, 58, 60, 61: // 有1字节参数的类型
+	case 8, 12, 15, 16, 17, 18, 21, 23, 24, 27, 28, 39, 47, 58, 60, 61: // Types with 1 byte parameter
 		return offset + 1
-	case 29: // Symmetry有16字节参数
+	case 29: // Symmetry has 16 byte parameters
 		return offset + 16
-	case 33, 41: // 有4字节参数的类型
+	case 33, 41: // Types with 4 byte parameters
 		return offset + 4
-	case 42: // Clone有3字节参数
+	case 42: // Clone has 3 byte parameters
 		return offset + 3
-	case 43: // SanctumS有10字节参数
+	case 43: // SanctumS has 10 byte parameters
 		return offset + 10
-	case 44, 45: // SanctumS Add/Remove Liquidity有5字节参数
+	case 44, 45: // SanctumS Add/Remove Liquidity has 5 byte parameters
 		return offset + 5
 	default:
-		return offset // 没有参数
+		return offset // No parameters
 	}
 }
 
-// printJupiterV6Results 打印详细的解析结果
+// printJupiterV6Results prints detailed parsing results
 func printJupiterV6Results(params *JupiterSwapParams) {
 	fmt.Println("\n=== Jupiter V6 Instruction Analysis ===")
 	fmt.Printf("Instruction Type: %s\n", params.InstructionType)
@@ -829,7 +828,7 @@ func printJupiterV6Results(params *JupiterSwapParams) {
 		fmt.Printf("  Min Amount Out: %d\n", params.MinAmountOut)
 	}
 
-	// 使用6位小数显示代币数量
+	// Display token amounts with 6 decimal places
 	fmt.Printf("\nFormatted Values (6 decimals):\n")
 	if params.InAmount != 0 {
 		fmt.Printf("  In Amount: %.6f\n", float64(params.InAmount)/1000000.0)
@@ -847,12 +846,12 @@ func printJupiterV6Results(params *JupiterSwapParams) {
 		fmt.Printf("  Min Amount Out: %.6f\n", float64(params.MinAmountOut)/1000000.0)
 	}
 
-	// 生成 JSON 格式的输出
+	// Generate JSON format output
 	fmt.Printf("\nJSON Format:\n")
 	printJSONFormat(params)
 }
 
-// printJSONFormat 打印JSON格式的输出
+// printJSONFormat prints JSON format output
 func printJSONFormat(params *JupiterSwapParams) {
 	fmt.Printf("{\n")
 	fmt.Printf("  \"instruction_type\": \"%s\",\n", params.InstructionType)
@@ -890,7 +889,7 @@ func printJSONFormat(params *JupiterSwapParams) {
 	fmt.Printf("}\n")
 }
 
-// formatParams 格式化参数为 JSON 字符串
+// formatParams formats parameters as a JSON string
 func formatParams(params map[string]interface{}) string {
 	if len(params) == 0 {
 		return "{}"
@@ -914,7 +913,7 @@ func formatParams(params map[string]interface{}) string {
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
-// bytesEqual 比较两个字节数组是否相等
+// bytesEqual compares if two byte arrays are equal
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -927,7 +926,7 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// 保留原有的辅助函数
+// resolveAddressLookupTables resolves address lookup tables
 func resolveAddressLookupTables(tx *solana.Transaction, rpcClient *rpc.Client) error {
 	if !tx.Message.IsVersioned() {
 		return nil // Not a versioned transaction
@@ -978,7 +977,7 @@ func resolveAddressLookupTables(tx *solana.Transaction, rpcClient *rpc.Client) e
 	return nil
 }
 
-// min 返回两个整数中的较小值
+// min returns the smaller of two integers
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -986,47 +985,7 @@ func min(a, b int) int {
 	return b
 }
 
-// 添加用于测试的独立函数
-func testJupiterParsing() {
-	fmt.Println("\n=== Testing Jupiter V6 Parsing ===")
-
-	// 测试案例 1: SharedAccountsRoute
-	fmt.Println("\n--- Test Case 1: SharedAccountsRoute ---")
-	hexData1 := "C1209B3341D69C810004000000075F0002110005000211016402033D006403042626F600040000005D61040D00000000640000"
-	data1, _ := hex.DecodeString(hexData1)
-
-	result1, err := parseJupiterV6Instruction(data1)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	} else {
-		printJupiterV6Results(result1)
-
-		// 验证结果
-		fmt.Println("\n--- Validation ---")
-		fmt.Printf("Expected vs Actual:\n")
-		fmt.Printf("  ID: 0 vs %d %s\n", result1.ID, boolToCheckmark(result1.ID == 0))
-		fmt.Printf("  Route steps: 4 vs %d %s\n", len(result1.RoutePlan), boolToCheckmark(len(result1.RoutePlan) == 4))
-	}
-
-	// 测试案例 2: Route instruction
-	fmt.Println("\n--- Test Case 2: Route ---")
-	hexData2 := "E517CB977AE3AD2A0100000048640001497ECC010000000046F5828E04000000AC0355"
-	data2, _ := hex.DecodeString(hexData2)
-
-	result2, err := parseJupiterV6Instruction(data2)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	} else {
-		printJupiterV6Results(result2)
-
-		// 验证结果
-		fmt.Println("\n--- Validation ---")
-		fmt.Printf("Expected vs Actual:\n")
-		fmt.Printf("  Route steps: 1 vs %d %s\n", len(result2.RoutePlan), boolToCheckmark(len(result2.RoutePlan) == 1))
-	}
-}
-
-// boolToCheckmark 将布尔值转换为检查标记
+// boolToCheckmark converts a boolean to a checkmark
 func boolToCheckmark(b bool) string {
 	if b {
 		return "✓"
@@ -1034,13 +993,13 @@ func boolToCheckmark(b bool) string {
 	return "✗"
 }
 
-// parseJupiterSwapEvent 解析 Jupiter V6 Swap Event
+// parseJupiterSwapEvent parses Jupiter V6 Swap Event
 func parseJupiterSwapEvent(data []byte) (*SwapEvent, error) {
 	if len(data) < 128 {
 		return nil, fmt.Errorf("swap event data too short: %d bytes", len(data))
 	}
 
-	// 检查 discriminator
+	// Check discriminator
 	if !bytesEqual(data[:8], SwapEventDiscriminator) {
 		return nil, fmt.Errorf("invalid swap event discriminator")
 	}
@@ -1050,32 +1009,32 @@ func parseJupiterSwapEvent(data []byte) (*SwapEvent, error) {
 		Unknown:       data[8:16],
 	}
 
-	// 解析 AMM 地址 (16-47 字节)
+	// Parse AMM address (bytes 16-47)
 	event.AMM = solana.PublicKeyFromBytes(data[16:48])
 
-	// 解析 Input Mint (48-79 字节)
+	// Parse Input Mint (bytes 48-79)
 	event.InputMint = solana.PublicKeyFromBytes(data[48:80])
 
-	// 解析 Input Amount (80-87 字节，小端序)
+	// Parse Input Amount (bytes 80-87, little-endian)
 	event.InputAmount = binary.LittleEndian.Uint64(data[80:88])
 
-	// 解析 Output Mint (88-119 字节)
+	// Parse Output Mint (bytes 88-119)
 	event.OutputMint = solana.PublicKeyFromBytes(data[88:120])
 
-	// 解析 Output Amount (120-127 字节，小端序)
+	// Parse Output Amount (bytes 120-127, little-endian)
 	event.OutputAmount = binary.LittleEndian.Uint64(data[120:128])
 
 	return event, nil
 }
 
-// parseJupiterSwapEventFromBase58 从 base58 字符串解析 Swap Event
+// parseJupiterSwapEventFromBase58 parses Swap Event from base58 string
 func parseJupiterSwapEventFromBase58(base58Data string) (*SwapEvent, error) {
 	data := []byte(base58Data)
 
 	return parseJupiterSwapEvent(data)
 }
 
-// extractJupiterEvents 从交易的内部指令中提取 Jupiter 事件
+// extractJupiterEvents extracts Jupiter events from transaction inner instructions
 func extractJupiterEvents(tx *rpc.GetTransactionResult) ([]SwapEvent, error) {
 	var events []SwapEvent
 
@@ -1088,19 +1047,19 @@ func extractJupiterEvents(tx *rpc.GetTransactionResult) ([]SwapEvent, error) {
 		return events, nil
 	}
 
-	// 遍历所有内部指令
+	// Iterate through all inner instructions
 	for _, innerInst := range tx.Meta.InnerInstructions {
 		for _, inst := range innerInst.Instructions {
-			// 检查是否是 Jupiter 程序指令
+			// Check if it's a Jupiter program instruction
 			if inst.ProgramIDIndex < uint16(len(parseTx.Message.AccountKeys)) {
 				programID := parseTx.Message.AccountKeys[inst.ProgramIDIndex]
 				if programID.Equals(jupiterV6ProgramID) {
-					// 尝试解析为 Swap Event
+					// Try to parse as Swap Event
 					if len(inst.Data) == 128 {
-						// 将 base58 编码的数据转换为字节
+						// Convert base58 encoded data to bytes
 						data := []byte(inst.Data)
 
-						// 检查是否是 Swap Event
+						// Check if it's a Swap Event
 						if bytesEqual(data[:8], SwapEventDiscriminator) {
 							event, err := parseJupiterSwapEvent(data)
 							if err == nil {
@@ -1113,17 +1072,17 @@ func extractJupiterEvents(tx *rpc.GetTransactionResult) ([]SwapEvent, error) {
 		}
 	}
 
-	// 也检查日志中的事件数据
+	// Also check logs for event data
 	if tx.Meta.LogMessages != nil {
 		for _, logMsg := range tx.Meta.LogMessages {
-			// 检查是否是程序数据日志
+			// Check if it's a program data log
 			if strings.Contains(logMsg, "Program data: ") {
-				// 提取数据部分
+				// Extract data part
 				parts := strings.Split(logMsg, "Program data: ")
 				if len(parts) > 1 {
 					base58Data := strings.TrimSpace(parts[1])
 
-					// 尝试解析为 Swap Event
+					// Try to parse as Swap Event
 					event, err := parseJupiterSwapEventFromBase58(base58Data)
 					if err == nil {
 						events = append(events, *event)
@@ -1136,14 +1095,14 @@ func extractJupiterEvents(tx *rpc.GetTransactionResult) ([]SwapEvent, error) {
 	return events, nil
 }
 
-// analyzeJupiterV6Transaction 完整分析 Jupiter V6 交易
+// analyzeJupiterV6Transaction fully analyzes Jupiter V6 transaction
 func analyzeJupiterV6Transaction(tx *rpc.GetTransactionResult, parsedTx *solana.Transaction) (*JupiterV6Analysis, error) {
 	analysis := &JupiterV6Analysis{
 		Instructions: []JupiterSwapParams{},
 		Events:       []SwapEvent{},
 	}
 
-	// 1. 解析指令
+	// 1. Parse instructions
 	for i, inst := range parsedTx.Message.Instructions {
 		programIDIndex := int(inst.ProgramIDIndex)
 		if programIDIndex >= len(parsedTx.Message.AccountKeys) {
@@ -1154,7 +1113,7 @@ func analyzeJupiterV6Transaction(tx *rpc.GetTransactionResult, parsedTx *solana.
 		if programID.Equals(jupiterV6ProgramID) {
 			fmt.Printf("\nAnalyzing Jupiter instruction at index %d\n", i)
 
-			// 解析指令
+			// Parse instruction
 			result, err := parseJupiterV6Instruction(inst.Data)
 			if err != nil {
 				fmt.Printf("Error parsing instruction: %v\n", err)
@@ -1165,36 +1124,36 @@ func analyzeJupiterV6Transaction(tx *rpc.GetTransactionResult, parsedTx *solana.
 		}
 	}
 
-	// 2. 提取事件
+	// 2. Extract events
 	events, err := extractJupiterEvents(tx)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting events: %v", err)
 	}
 	analysis.Events = events
 
-	// 3. 生成摘要
+	// 3. Generate summary
 	analysis.Summary = generateSwapSummary(analysis.Instructions, analysis.Events)
 
 	return analysis, nil
 }
 
-// generateSwapSummary 生成交换摘要
+// generateSwapSummary generates swap summary
 func generateSwapSummary(instructions []JupiterSwapParams, events []SwapEvent) SwapSummary {
 	summary := SwapSummary{
 		TotalSwaps: len(events),
 	}
 
 	if len(events) > 0 {
-		// 输入代币是第一个事件的输入
+		// Input token is the input of the first event
 		summary.InputToken = events[0].InputMint.String()
 		summary.TotalInput = events[0].InputAmount
 
-		// 输出代币是最后一个事件的输出
+		// Output token is the output of the last event
 		lastEvent := events[len(events)-1]
 		summary.OutputToken = lastEvent.OutputMint.String()
 		summary.TotalOutput = lastEvent.OutputAmount
 
-		// 构建路由信息
+		// Build route information
 		route := []string{summary.InputToken}
 		for _, event := range events {
 			route = append(route, event.OutputMint.String())
@@ -1205,7 +1164,7 @@ func generateSwapSummary(instructions []JupiterSwapParams, events []SwapEvent) S
 	return summary
 }
 
-// printSwapEvent 打印 Swap Event 的详细信息
+// printSwapEvent prints detailed information of a Swap Event
 func printSwapEvent(event SwapEvent, index int) {
 	fmt.Printf("\n=== Swap Event %d ===\n", index+1)
 	fmt.Printf("Discriminator: %X\n", event.Discriminator)
@@ -1216,17 +1175,17 @@ func printSwapEvent(event SwapEvent, index int) {
 	fmt.Printf("Output Mint: %s\n", event.OutputMint.String())
 	fmt.Printf("Output Amount: %d\n", event.OutputAmount)
 
-	// 格式化为 6 位小数
+	// Format to 6 decimal places
 	fmt.Printf("\nFormatted Values (6 decimals):\n")
 	fmt.Printf("  Input Amount: %.6f\n", float64(event.InputAmount)/1000000.0)
 	fmt.Printf("  Output Amount: %.6f\n", float64(event.OutputAmount)/1000000.0)
 }
 
-// printJupiterV6Analysis 打印完整的 Jupiter V6 分析结果
+// printJupiterV6Analysis prints complete Jupiter V6 analysis results
 func printJupiterV6Analysis(analysis *JupiterV6Analysis) {
 	fmt.Println("\n=== Jupiter V6 Transaction Analysis ===")
 
-	// 打印摘要
+	// Print summary
 	fmt.Printf("\nSummary:\n")
 	fmt.Printf("  Total Swaps: %d\n", analysis.Summary.TotalSwaps)
 	fmt.Printf("  Input Token: %s\n", analysis.Summary.InputToken)
@@ -1235,25 +1194,25 @@ func printJupiterV6Analysis(analysis *JupiterV6Analysis) {
 	fmt.Printf("  Total Output: %d (%.6f)\n", analysis.Summary.TotalOutput, float64(analysis.Summary.TotalOutput)/1000000.0)
 	fmt.Printf("  Route: %s\n", analysis.Summary.Route)
 
-	// 打印指令详情
+	// Print instruction details
 	fmt.Printf("\nInstructions (%d):\n", len(analysis.Instructions))
 	for i, inst := range analysis.Instructions {
 		fmt.Printf("\n--- Instruction %d ---\n", i+1)
 		printJupiterV6Results(&inst)
 	}
 
-	// 打印事件详情
+	// Print event details
 	fmt.Printf("\nSwap Events (%d):\n", len(analysis.Events))
 	for i, event := range analysis.Events {
 		printSwapEvent(event, i)
 	}
 
-	// 生成 JSON 输出
+	// Generate JSON output
 	fmt.Printf("\n=== JSON Output ===\n")
 	printJupiterV6AnalysisJSON(analysis)
 }
 
-// printJupiterV6AnalysisJSON 打印 JSON 格式的分析结果
+// printJupiterV6AnalysisJSON prints analysis results in JSON format
 func printJupiterV6AnalysisJSON(analysis *JupiterV6Analysis) {
 	fmt.Printf("{\n")
 	fmt.Printf("  \"summary\": {\n")
@@ -1349,64 +1308,13 @@ func main() {
 	fmt.Printf("  Instructions count: %d\n", len(parsedTx.Message.Instructions))
 	fmt.Printf("  Is versioned: %v\n", parsedTx.Message.IsVersioned())
 
-	// Now find and parse Jupiter instructions
-	found := false
-	for i, inst := range parsedTx.Message.Instructions {
-		// Safely access program ID
-		programIDIndex := int(inst.ProgramIDIndex)
-		if programIDIndex >= len(parsedTx.Message.AccountKeys) {
-			fmt.Printf("Instruction %d: Program ID index out of range\n", i)
-			continue
-		}
-
-		programID := parsedTx.Message.AccountKeys[programIDIndex]
-		if programID.Equals(jupiterV6ProgramID) {
-			found = true
-			fmt.Printf("\nFound Jupiter instruction at index %d\n", i)
-			fmt.Printf("Data length: %d bytes\n", len(inst.Data))
-
-			if len(inst.Data) > 0 {
-				// Print raw bytes for debugging
-				fmt.Printf("Raw data (First 32 bytes): %X\n", inst.Data[:min(32, len(inst.Data))])
-
-				// Parse the instruction
-				result, err := parseJupiterV6Instruction(inst.Data)
-				if err != nil {
-					fmt.Printf("Error parsing Jupiter V6 instruction: %v\n", err)
-					continue
-				}
-
-				// Print detailed results
-				printJupiterV6Results(result)
-			}
-		}
-	}
-
-	if !found {
-		fmt.Println("No Jupiter instructions found in main instructions")
-		// Check inner instructions if available
-		if tx.Meta != nil && tx.Meta.InnerInstructions != nil {
-			for _, innerInst := range tx.Meta.InnerInstructions {
-				for i, inst := range innerInst.Instructions {
-					if inst.ProgramIDIndex < uint16(len(parsedTx.Message.AccountKeys)) {
-						programID := parsedTx.Message.AccountKeys[inst.ProgramIDIndex]
-						if programID.Equals(jupiterV6ProgramID) {
-							fmt.Printf("\nFound Jupiter instruction in inner instruction at index %d\n", i)
-							// 处理内部指令...
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 执行完整的 Jupiter V6 分析
+	// Perform complete Jupiter V6 analysis
 	analysis, err := analyzeJupiterV6Transaction(tx, parsedTx)
 	if err != nil {
 		fmt.Printf("Error analyzing Jupiter V6 transaction: %v\n", err)
 		return
 	}
 
-	// 打印分析结果
+	// Print analysis results
 	printJupiterV6Analysis(analysis)
 }
